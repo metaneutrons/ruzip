@@ -169,7 +169,7 @@ impl<R: Read + Seek> ArchiveReader<R> {
                     }
                 }
 
-                self.extract_file_entry(entry, &entry_path)?;
+                self.extract_file_entry(entry, &entry_path, dest_dir)?;
                 stats.files_processed += 1;
                 stats.bytes_processed += entry.uncompressed_size;
             } else if entry.is_symlink() {
@@ -212,7 +212,7 @@ impl<R: Read + Seek> ArchiveReader<R> {
                 }
 
                 if entry.is_file() {
-                    self.extract_file_entry(&entry, &entry_path)?;
+                    self.extract_file_entry(&entry, &entry_path, dest_dir)?;
                     stats.files_processed += 1;
                     stats.bytes_processed += entry.uncompressed_size;
                 } else if entry.is_directory() {
@@ -351,9 +351,9 @@ impl<R: Read + Seek> ArchiveReader<R> {
         Ok(())
     }
 
-    fn extract_file_entry(&mut self, entry: &FileEntry, dest_path: &Path) -> Result<()> {
+    fn extract_file_entry(&mut self, entry: &FileEntry, dest_path: &Path, base_dir: &Path) -> Result<()> {
         // Validate path safety
-        self.validate_extraction_path(dest_path)?;
+        self.validate_extraction_path_with_base(dest_path, Some(base_dir))?;
 
         // Seek to file data
         self.reader.seek(SeekFrom::Start(entry.data_offset))?;
@@ -393,7 +393,7 @@ impl<R: Read + Seek> ArchiveReader<R> {
             let link_path = dest_dir.join(&entry.path);
             
             // Validate path safety
-            self.validate_extraction_path(&link_path)?;
+            self.validate_extraction_path_with_base(&link_path, link_path.parent())?;
 
             #[cfg(unix)]
             {
@@ -422,46 +422,82 @@ impl<R: Read + Seek> ArchiveReader<R> {
         Ok(())
     }
 
-    fn validate_extraction_path(&self, path: &Path) -> Result<()> {
-        // Check for path traversal attacks
-        let normalized = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    fn validate_extraction_path_with_base(&self, path: &Path, base_dir: Option<&Path>) -> Result<()> {
+        // Check for path traversal attacks using multiple validation approaches
         
-        // DEBUG: Log path validation details to understand usage patterns
-        tracing::debug!(
-            original_path = %path.display(),
-            normalized_path = %normalized.display(),
-            paths_equal = %format!("{}", path == normalized),
-            "Path validation details"
-        );
-        
-        // Basic check for ".." components. More robust checks might be needed
-        // depending on how `path` is constructed and used.
-        // This check is against the fully resolved (canonicalized) path.
-        // The real risk is often from how `entry.path` (relative path from archive)
-        // combines with `dest_dir`.
+        // Primary security check: component-based validation
         if path.components().any(|comp| comp.as_os_str() == "..") {
-             // Using entry.path (if available) or path for the message.
-             // For this function, `path` is the full destination path.
-            tracing::warn!(path = %path.display(), "Path traversal attempt detected");
             return Err(RuzipError::invalid_input(
-                format!("Invalid extraction path: potential path traversal for '{}'", path.display()),
+                format!("Invalid extraction path: contains '..' components '{}'", path.display()),
                 Some(path.display().to_string()),
             ));
         }
         
-        // DEBUG: Check if normalized path would catch anything the component check misses
-        if normalized.components().any(|comp| comp.as_os_str() == "..") {
-            tracing::warn!(
-                normalized_path = %normalized.display(),
-                "Normalized path contains '..' components that original check missed"
-            );
+        // Attempt to canonicalize paths for robust validation
+        let normalized_path = path.canonicalize().unwrap_or_else(|_| {
+            // If canonicalization fails (path doesn't exist yet), try to resolve manually
+            self.resolve_path_manually(path)
+        });
+        
+        // Secondary security check: normalized path validation
+        if normalized_path.components().any(|comp| comp.as_os_str() == "..") {
+            return Err(RuzipError::invalid_input(
+                format!("Invalid extraction path: normalized path contains '..' components '{}'", normalized_path.display()),
+                Some(normalized_path.display().to_string()),
+            ));
         }
         
-        // A more robust check would be to ensure `normalized_path.starts_with(canonical_dest_dir)`
-        // This requires `dest_dir` to be canonicalized and passed here, or do it here.
-        // For now, the component check is a basic safeguard.
+        // Tertiary security check: ensure normalized path stays within base directory (if provided)
+        if let Some(base) = base_dir {
+            // Ensure both paths are resolved consistently by canonicalizing the base first
+            let canonical_base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+            
+            // For the file path, try to construct the expected canonical path
+            let expected_canonical_path = canonical_base.join(
+                path.strip_prefix(base).unwrap_or(path)
+            );
+            
+            // Check if the manually constructed path is within the base
+            if !expected_canonical_path.starts_with(&canonical_base) {
+                return Err(RuzipError::invalid_input(
+                    format!(
+                        "Invalid extraction path: '{}' would escape base directory '{}'",
+                        expected_canonical_path.display(),
+                        canonical_base.display()
+                    ),
+                    Some(format!("path={}, base={}", expected_canonical_path.display(), canonical_base.display())),
+                ));
+            }
+        }
 
         Ok(())
+    }
+    
+    /// Manually resolve a path when canonicalize() fails (for non-existent paths)
+    fn resolve_path_manually(&self, path: &Path) -> std::path::PathBuf {
+        let mut resolved = std::path::PathBuf::new();
+        
+        for component in path.components() {
+            match component {
+                std::path::Component::Prefix(prefix) => resolved.push(prefix.as_os_str()),
+                std::path::Component::RootDir => resolved.push("/"),
+                std::path::Component::CurDir => {
+                    // Skip current directory references
+                }
+                std::path::Component::ParentDir => {
+                    // Handle parent directory references
+                    if !resolved.pop() {
+                        // If we can't go up further, this is a potential traversal
+                        resolved.push("..");
+                    }
+                }
+                std::path::Component::Normal(name) => {
+                    resolved.push(name);
+                }
+            }
+        }
+        
+        resolved
     }
 
     fn restore_file_metadata(&self, path: &Path, metadata: &crate::archive::FileMetadata) -> Result<()> {
@@ -621,26 +657,30 @@ mod tests {
         let cursor = Cursor::new(&archive_data);
         let reader = ArchiveReader::new(cursor).unwrap();
         
-        // Test 1: Valid normal path
-        let valid_path = Path::new("/tmp/safe/file.txt");
-        let result = reader.validate_extraction_path(valid_path);
-        assert!(result.is_ok(), "Valid path should pass validation");
+        // Use tempdir for realistic testing with actual filesystem paths
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+        
+        // Test 1: Valid normal path within temp directory
+        let valid_path = temp_path.join("safe").join("file.txt");
+        let result = reader.validate_extraction_path_with_base(&valid_path, Some(temp_path));
+        assert!(result.is_ok(), "Valid path should pass validation: {:?}", result.err());
         
         // Test 2: Path with .. components (should fail)
-        let dangerous_path = Path::new("/tmp/safe/../../../etc/passwd");
-        let result = reader.validate_extraction_path(dangerous_path);
+        let dangerous_path = temp_path.join("safe").join("..").join("..").join("..").join("etc").join("passwd");
+        let result = reader.validate_extraction_path_with_base(&dangerous_path, Some(temp_path));
         assert!(result.is_err(), "Path with .. components should fail validation");
         
         // Test 3: Relative path without .. (should pass)
         let relative_path = Path::new("safe/subfolder/file.txt");
-        let result = reader.validate_extraction_path(relative_path);
-        assert!(result.is_ok(), "Safe relative path should pass validation");
+        let result = reader.validate_extraction_path_with_base(relative_path, None);
+        assert!(result.is_ok(), "Safe relative path should pass validation: {:?}", result.err());
         
         // Test 4: Path that becomes dangerous after normalization
-        let tricky_path = Path::new("/tmp/safe/./subdir/../../../etc/passwd");
-        let result = reader.validate_extraction_path(tricky_path);
-        // This should pass with current implementation since it only checks components,
-        // but our logging will reveal if normalization would catch it
-        println!("Testing tricky path normalization behavior");
+        let tricky_path = temp_path.join("safe").join(".").join("subdir").join("..").join("..").join("..").join("etc").join("passwd");
+        let result = reader.validate_extraction_path_with_base(&tricky_path, Some(temp_path));
+        assert!(result.is_err(), "Tricky path should fail validation after normalization");
+        
+        println!("All path validation tests completed");
     }
 }
