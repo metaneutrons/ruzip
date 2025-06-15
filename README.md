@@ -242,9 +242,3 @@ the Free Software Foundation, either version 3 of the License, or
 - **[clap](https://github.com/clap-rs/clap)** - Command-line argument parsing
 - **[tokio](https://tokio.rs/)** - Asynchronous runtime
 - **[rayon](https://github.com/rayon-rs/rayon)** - Data parallelism
-
----
-
-**Made with ❤️ for the open source community**
-
-[![Star History Chart](https://api.star-history.com/svg?repos=metaneutrons/ruzip&type=Date)](https://star-history.com/#metaneutrons/ruzip&Date)
