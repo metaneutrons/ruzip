@@ -13,6 +13,7 @@ use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::time::Instant;
+use tracing;
 
 /// Archive reader for reading RuZip archives
 pub struct ArchiveReader<R: Read + Seek> {
@@ -425,6 +426,14 @@ impl<R: Read + Seek> ArchiveReader<R> {
         // Check for path traversal attacks
         let normalized = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         
+        // DEBUG: Log path validation details to understand usage patterns
+        tracing::debug!(
+            original_path = %path.display(),
+            normalized_path = %normalized.display(),
+            paths_equal = %format!("{}", path == normalized),
+            "Path validation details"
+        );
+        
         // Basic check for ".." components. More robust checks might be needed
         // depending on how `path` is constructed and used.
         // This check is against the fully resolved (canonicalized) path.
@@ -433,11 +442,21 @@ impl<R: Read + Seek> ArchiveReader<R> {
         if path.components().any(|comp| comp.as_os_str() == "..") {
              // Using entry.path (if available) or path for the message.
              // For this function, `path` is the full destination path.
+            tracing::warn!(path = %path.display(), "Path traversal attempt detected");
             return Err(RuzipError::invalid_input(
                 format!("Invalid extraction path: potential path traversal for '{}'", path.display()),
                 Some(path.display().to_string()),
             ));
         }
+        
+        // DEBUG: Check if normalized path would catch anything the component check misses
+        if normalized.components().any(|comp| comp.as_os_str() == "..") {
+            tracing::warn!(
+                normalized_path = %normalized.display(),
+                "Normalized path contains '..' components that original check missed"
+            );
+        }
+        
         // A more robust check would be to ensure `normalized_path.starts_with(canonical_dest_dir)`
         // This requires `dest_dir` to be canonicalized and passed here, or do it here.
         // For now, the component check is a basic safeguard.
@@ -591,5 +610,37 @@ mod tests {
         let stats = reader.test_integrity().unwrap();
         assert_eq!(stats.files_processed, 1);
         assert!(stats.bytes_processed > 0);
+    }
+
+    #[test]
+    fn test_validate_extraction_path() {
+        // Initialize test logging to capture our debug output
+        let _ = crate::utils::logging::init_test_logging();
+        
+        let archive_data = create_test_archive();
+        let cursor = Cursor::new(&archive_data);
+        let reader = ArchiveReader::new(cursor).unwrap();
+        
+        // Test 1: Valid normal path
+        let valid_path = Path::new("/tmp/safe/file.txt");
+        let result = reader.validate_extraction_path(valid_path);
+        assert!(result.is_ok(), "Valid path should pass validation");
+        
+        // Test 2: Path with .. components (should fail)
+        let dangerous_path = Path::new("/tmp/safe/../../../etc/passwd");
+        let result = reader.validate_extraction_path(dangerous_path);
+        assert!(result.is_err(), "Path with .. components should fail validation");
+        
+        // Test 3: Relative path without .. (should pass)
+        let relative_path = Path::new("safe/subfolder/file.txt");
+        let result = reader.validate_extraction_path(relative_path);
+        assert!(result.is_ok(), "Safe relative path should pass validation");
+        
+        // Test 4: Path that becomes dangerous after normalization
+        let tricky_path = Path::new("/tmp/safe/./subdir/../../../etc/passwd");
+        let result = reader.validate_extraction_path(tricky_path);
+        // This should pass with current implementation since it only checks components,
+        // but our logging will reveal if normalization would catch it
+        println!("Testing tricky path normalization behavior");
     }
 }
