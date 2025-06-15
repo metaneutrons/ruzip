@@ -173,7 +173,7 @@ impl PublicKey {
                     }
                     DigitalSignature::None => Err(CryptoError::invalid_parameters(
                         "Cannot export key for None algorithm",
-                        None,
+                        Some("algorithm".to_string()),
                     )),
                 }
             }
@@ -188,7 +188,7 @@ impl PublicKey {
                     }
                     DigitalSignature::None => Err(CryptoError::invalid_parameters(
                         "Cannot export key for None algorithm",
-                        None,
+                        Some("algorithm".to_string()),
                     )),
                 }
             }
@@ -274,7 +274,7 @@ impl PrivateKey {
                     }
                     DigitalSignature::None => Err(CryptoError::invalid_parameters(
                         "Cannot export key for None algorithm",
-                        None,
+                        Some("algorithm".to_string()),
                     )),
                 }
             }
@@ -1073,6 +1073,31 @@ mod tests {
         for handle in handles {
             let result = handle.join().unwrap();
             assert!(result < 4);
+        }
+    }
+
+    #[test]
+    fn test_export_none_algorithm_error_context() {
+        // Test PublicKey export
+        let public_key_none = PublicKey::new(vec![], DigitalSignature::None);
+        let pub_export_result = public_key_none.export(KeyFormat::Pem);
+        assert!(pub_export_result.is_err());
+        if let Err(CryptoError::InvalidParameters { message, parameter }) = pub_export_result {
+            assert!(message.contains("Cannot export key for None algorithm"));
+            assert_eq!(parameter, Some("algorithm".to_string()));
+        } else {
+            panic!("Expected InvalidParameters error for PublicKey export with None algorithm, got {:?}", pub_export_result);
+        }
+
+        // Test PrivateKey export
+        let private_key_none = PrivateKey::new(vec![], DigitalSignature::None);
+        let priv_export_result = private_key_none.export(KeyFormat::Pem);
+        assert!(priv_export_result.is_err());
+        if let Err(CryptoError::InvalidParameters { message, parameter }) = priv_export_result {
+            assert!(message.contains("Cannot export key for None algorithm"));
+            assert_eq!(parameter, Some("algorithm".to_string()));
+        } else {
+            panic!("Expected InvalidParameters error for PrivateKey export with None algorithm, got {:?}", priv_export_result);
         }
     }
 }

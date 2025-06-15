@@ -44,7 +44,9 @@ impl<W: Write + Seek> ArchiveWriter<W> {
         
         // Reserve space for header (will be written at the end)
         let header_size = ArchiveHeader::SIZE as u64;
-        buffered_writer.seek(SeekFrom::Start(header_size))?;
+        buffered_writer.seek(SeekFrom::Start(header_size)).map_err(|e| {
+            RuzipError::io_error("Failed to seek for initial header reservation", e)
+        })?;
 
         Ok(Self {
             writer: buffered_writer,
@@ -388,14 +390,14 @@ impl<W: Write + Seek> ArchiveWriter<W> {
     fn write_entry_table(&mut self) -> Result<()> {
         // Serialize entry table using bincode
         let serialized = bincode::serialize(&self.entries).map_err(|e| {
-            RuzipError::archive_format_error(
-                "Failed to serialize entry table",
-                Some(e.to_string()),
+            RuzipError::internal_error(
+                format!("Failed to serialize entry table: {}", e),
+                Some("ArchiveWriter::write_entry_table"),
             )
         })?;
 
         self.writer.write_all(&serialized).map_err(|e| {
-            RuzipError::io_error("Failed to write entry table", e)
+            RuzipError::io_error("Failed to write entry table to output stream", e)
         })?;
 
         Ok(())

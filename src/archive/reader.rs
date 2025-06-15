@@ -33,10 +33,11 @@ impl<R: Read + Seek> ArchiveReader<R> {
         let compression_method = match header.compression_method {
             0 => CompressionMethod::Zstd,
             1 => CompressionMethod::Store,
-            _ => return Err(RuzipError::archive_format_error(
-                format!("Unknown compression method: {}", header.compression_method),
-                None,
-            )),
+            // TODO: Add support for other methods if they are defined in header.rs spec
+            id => return Err(RuzipError::header_parse_error(format!(
+                "Unsupported compression_method ID '{}' in archive header.",
+                id
+            ))),
         };
 
         let compression_engine = CompressionEngine::new()
@@ -268,24 +269,28 @@ impl<R: Read + Seek> ArchiveReader<R> {
 
                 // Verify decompressed size matches expected
                 if output.len() != entry.uncompressed_size as usize {
-                    return Err(RuzipError::archive_format_error(
+                        return Err(RuzipError::entry_parse_error(
+                            Some(entry.path.clone()),
                         format!(
-                            "Size mismatch for {}: expected {}, got {}",
-                            entry.path,
+                                "Decompressed size mismatch. Expected {}, got {}.",
                             entry.uncompressed_size,
                             output.len()
                         ),
-                        None,
                     ));
                 }
 
                 // Verify checksum if available
                 if let Some(expected_checksum) = &entry.checksum {
-                    let actual_checksum = self.calculate_data_checksum(&output);
-                    if &actual_checksum != expected_checksum {
-                        return Err(RuzipError::archive_format_error(
-                            format!("Checksum mismatch for: {}", entry.path),
-                            None,
+                        let actual_checksum_bytes = self.calculate_data_checksum(&output);
+                        // Convert checksums to hex strings for comparison in error messages
+                        let expected_hex = expected_checksum.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                        let actual_hex = actual_checksum_bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+
+                        if actual_checksum_bytes != *expected_checksum {
+                            return Err(RuzipError::checksum_mismatch(
+                                entry.path.clone(),
+                                expected_hex,
+                                actual_hex,
                         ));
                     }
                 }
@@ -321,9 +326,9 @@ impl<R: Read + Seek> ArchiveReader<R> {
 
         if !entry_data.is_empty() {
             self.entries = bincode::deserialize(&entry_data).map_err(|e| {
-                RuzipError::archive_format_error(
-                    "Failed to deserialize entry table",
-                    Some(e.to_string()),
+                RuzipError::entry_parse_error(
+                    None, // Error is for the whole table, not a specific entry name
+                    format!("Failed to deserialize entry table: {}", e),
                 )
             })?;
 
@@ -334,14 +339,11 @@ impl<R: Read + Seek> ArchiveReader<R> {
 
             // Validate entry count matches header
             if self.entries.len() != self.header.entry_count as usize {
-                return Err(RuzipError::archive_format_error(
-                    format!(
-                        "Entry count mismatch: header says {}, found {}",
-                        self.header.entry_count,
-                        self.entries.len()
-                    ),
-                    None,
-                ));
+                return Err(RuzipError::header_parse_error(format!(
+                    "Entry count mismatch. Header states {}, but found {} entries in table.",
+                    self.header.entry_count,
+                    self.entries.len()
+                )));
             }
         }
 
@@ -423,12 +425,22 @@ impl<R: Read + Seek> ArchiveReader<R> {
         // Check for path traversal attacks
         let normalized = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         
-        if normalized.components().any(|comp| comp.as_os_str() == "..") {
-            return Err(RuzipError::archive_format_error(
-                format!("Path traversal detected: {}", path.display()),
-                None,
+        // Basic check for ".." components. More robust checks might be needed
+        // depending on how `path` is constructed and used.
+        // This check is against the fully resolved (canonicalized) path.
+        // The real risk is often from how `entry.path` (relative path from archive)
+        // combines with `dest_dir`.
+        if path.components().any(|comp| comp.as_os_str() == "..") {
+             // Using entry.path (if available) or path for the message.
+             // For this function, `path` is the full destination path.
+            return Err(RuzipError::invalid_input(
+                format!("Invalid extraction path: potential path traversal for '{}'", path.display()),
+                Some(path.display().to_string()),
             ));
         }
+        // A more robust check would be to ensure `normalized_path.starts_with(canonical_dest_dir)`
+        // This requires `dest_dir` to be canonicalized and passed here, or do it here.
+        // For now, the component check is a basic safeguard.
 
         Ok(())
     }

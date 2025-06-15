@@ -141,9 +141,10 @@ impl ArchiveFormat {
     pub fn for_version(version: FormatVersion) -> Result<Self> {
         match version {
             FormatVersion { major: 1, minor: 0 } => Ok(Self::v1_0()),
-            _ => Err(RuzipError::archive_format_error(
-                format!("Unsupported format version: {}", version),
-                None,
+            _ => Err(RuzipError::invalid_version(
+                version.as_u16(),
+                FormatVersion::MIN_SUPPORTED.as_u16(),
+                FormatVersion::CURRENT.as_u16(),
             )),
         }
     }
@@ -317,30 +318,39 @@ pub mod detection {
         // Read magic bytes
         let mut magic = [0u8; 4];
         reader.read_exact(&mut magic).map_err(|e| {
-            RuzipError::io_error("Failed to read magic bytes", e)
+            if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                RuzipError::archive_too_short("Reading magic bytes".to_string(), 4, 3) // Indicate less than 4
+            } else {
+                RuzipError::io_error("Failed to read magic bytes", e)
+            }
         })?;
 
         if &magic != crate::archive::RUZIP_MAGIC {
-            return Err(RuzipError::archive_format_error(
-                "Invalid archive format (magic bytes mismatch)",
-                Some(format!("Found: {:?}", magic)),
-            ));
+            return Err(RuzipError::header_parse_error(format!(
+                "Invalid magic bytes. Expected {:?}, found {:?}",
+                crate::archive::RUZIP_MAGIC, magic
+            )));
         }
 
         // Read version
         let mut version_bytes = [0u8; 2];
         reader.read_exact(&mut version_bytes).map_err(|e| {
-            RuzipError::io_error("Failed to read version", e)
+            if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                RuzipError::archive_too_short("Reading version bytes".to_string(), 2, 1) // Indicate less than 2
+            } else {
+                RuzipError::io_error("Failed to read version bytes", e)
+            }
         })?;
 
         let version_u16 = u16::from_le_bytes(version_bytes);
         let version = FormatVersion::from_u16(version_u16);
 
-        // Validate version is supported
+        // Validate version is supported for reading
         if !FormatVersion::CURRENT.can_read(&version) {
-            return Err(RuzipError::archive_format_error(
-                format!("Unsupported archive version: {}", version),
-                None,
+             return Err(RuzipError::invalid_version(
+                version.as_u16(),
+                FormatVersion::MIN_SUPPORTED.as_u16(),
+                FormatVersion::CURRENT.as_u16(),
             ));
         }
 

@@ -207,26 +207,28 @@ impl ArchiveHeader {
     pub fn validate(&self) -> Result<()> {
         // Check magic bytes
         if &self.magic != RUZIP_MAGIC {
-            return Err(RuzipError::archive_format_error(
-                "Invalid archive magic bytes",
-                Some(format!("Expected {:?}, found {:?}", RUZIP_MAGIC, self.magic)),
-            ));
+            return Err(RuzipError::header_parse_error(format!(
+                "Invalid magic bytes. Expected {:?}, found {:?}",
+                RUZIP_MAGIC, self.magic
+            )));
         }
 
         // Check version compatibility
-        if self.version < crate::archive::MIN_SUPPORTED_VERSION {
-            return Err(RuzipError::archive_format_error(
-                format!("Unsupported archive version {}", self.version),
-                Some(format!("Minimum supported version is {}", crate::archive::MIN_SUPPORTED_VERSION)),
+        // Assuming CURRENT_VERSION is the max supported version for this library instance
+        if self.version < crate::archive::MIN_SUPPORTED_VERSION || self.version > CURRENT_VERSION {
+            return Err(RuzipError::invalid_version(
+                self.version,
+                crate::archive::MIN_SUPPORTED_VERSION,
+                CURRENT_VERSION,
             ));
         }
 
         // Check header size
         if self.header_size as usize != Self::SIZE {
-            return Err(RuzipError::archive_format_error(
-                format!("Invalid header size {}", self.header_size),
-                Some(format!("Expected size {}", Self::SIZE)),
-            ));
+            return Err(RuzipError::header_parse_error(format!(
+                "Invalid header_size field in header. Expected {}, found {}",
+                Self::SIZE, self.header_size
+            )));
         }
 
         // Validate entry count
@@ -266,10 +268,10 @@ impl ArchiveHeader {
     pub fn verify_checksum(&self) -> Result<()> {
         let calculated = self.calculate_checksum();
         if calculated != self.header_checksum {
-            return Err(RuzipError::archive_format_error(
-                "Header checksum mismatch",
-                Some(format!("Expected {}, found {}", calculated, self.header_checksum)),
-            ));
+            return Err(RuzipError::header_parse_error(format!(
+                "Header checksum validation failed. Expected checksum field value {:#010x}, calculated {:#010x}",
+                self.header_checksum, calculated
+            )));
         }
         Ok(())
     }
@@ -280,22 +282,22 @@ impl ArchiveHeader {
         self.update_checksum();
 
         let serialized = bincode::serialize(self).map_err(|e| {
-            RuzipError::archive_format_error(
-                "Failed to serialize header",
-                Some(e.to_string()),
-            )
+            RuzipError::header_parse_error(format!(
+                "Internal error during header serialization: {}", e
+            ))
         })?;
 
         // Ensure exact size
         if serialized.len() != Self::SIZE {
-            return Err(RuzipError::archive_format_error(
-                format!("Serialized header size mismatch: {} != {}", serialized.len(), Self::SIZE),
-                None,
+            // This is a critical internal error, implies a bug in struct definition or bincode
+            return Err(RuzipError::internal_error(
+                format!("Critical: Serialized header size mismatch: expected {}, got {}", Self::SIZE, serialized.len()),
+                Some("ArchiveHeader::serialize"),
             ));
         }
 
         writer.write_all(&serialized).map_err(|e| {
-            RuzipError::io_error("Failed to write header", e)
+            RuzipError::io_error("Failed to write header to output stream", e) // Keep specific IO error here
         })?;
 
         Ok(())
@@ -304,15 +306,28 @@ impl ArchiveHeader {
     /// Deserialize header from binary format
     pub fn deserialize<R: Read>(mut reader: R) -> Result<Self> {
         let mut buffer = vec![0u8; Self::SIZE];
-        reader.read_exact(&mut buffer).map_err(|e| {
-            RuzipError::io_error("Failed to read header", e)
-        })?;
+        match reader.read_exact(&mut buffer) {
+            Ok(_) => (),
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                    // If read_exact encounters EOF, it means the stream was shorter than Self::SIZE.
+                    // We don't know exactly how many bytes were read by read_exact before erroring,
+                    // but it was less than Self::SIZE.
+                    return Err(RuzipError::archive_too_short(
+                        "Reading archive header".to_string(),
+                        Self::SIZE as u64,
+                        Self::SIZE as u64 - 1, // Indicates less than expected, actual amount not easily known here
+                    ));
+                } else {
+                    return Err(RuzipError::io_error("Failed to read header data from stream", e));
+                }
+            }
+        };
 
         let header: Self = bincode::deserialize(&buffer).map_err(|e| {
-            RuzipError::archive_format_error(
-                "Failed to deserialize header",
-                Some(e.to_string()),
-            )
+            RuzipError::header_parse_error(format!(
+                "Failed to deserialize header data from buffer: {}", e
+            ))
         })?;
 
         // Validate and verify checksum

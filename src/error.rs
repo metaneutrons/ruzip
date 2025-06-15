@@ -106,6 +106,37 @@ pub enum RuzipError {
         message: String,
         location: Option<&'static str>,
     },
+
+    // --- New Archive Specific Errors ---
+    #[error("Failed to parse archive header: {details}")]
+    HeaderParseError { details: String },
+
+    #[error("Failed to parse file entry '{entry_name:?}' in archive: {details}")]
+    EntryParseError {
+        entry_name: Option<String>,
+        details: String,
+    },
+
+    #[error("Checksum mismatch for entry '{entry_name}': expected {expected}, found {actual}")]
+    ChecksumMismatch {
+        entry_name: String,
+        expected: String, // Hex strings or similar
+        actual: String,
+    },
+
+    #[error("Archive is too short for operation '{operation}'. Expected at least {expected_len} bytes, found {actual_len} bytes.")]
+    ArchiveTooShort {
+        operation: String,
+        expected_len: u64,
+        actual_len: u64,
+    },
+
+    #[error("Unsupported archive version: read {version_read}, supported versions are {supported_min}-{supported_max}.")]
+    InvalidVersion {
+        version_read: u16,
+        supported_min: u16,
+        supported_max: u16,
+    },
 }
 
 impl RuzipError {
@@ -231,6 +262,55 @@ impl RuzipError {
         }
     }
 
+    // --- Constructors for New Archive Specific Errors ---
+    pub fn header_parse_error<S: Into<String>>(details: S) -> Self {
+        Self::HeaderParseError {
+            details: details.into(),
+        }
+    }
+
+    pub fn entry_parse_error<S: Into<String>>(
+        entry_name: Option<String>,
+        details: S,
+    ) -> Self {
+        Self::EntryParseError {
+            entry_name,
+            details: details.into(),
+        }
+    }
+
+    pub fn checksum_mismatch<S1: Into<String>, S2: Into<String>, S3: Into<String>>(
+        entry_name: S1,
+        expected: S2,
+        actual: S3,
+    ) -> Self {
+        Self::ChecksumMismatch {
+            entry_name: entry_name.into(),
+            expected: expected.into(),
+            actual: actual.into(),
+        }
+    }
+
+    pub fn archive_too_short<S: Into<String>>(
+        operation: S,
+        expected_len: u64,
+        actual_len: u64,
+    ) -> Self {
+        Self::ArchiveTooShort {
+            operation: operation.into(),
+            expected_len,
+            actual_len,
+        }
+    }
+
+    pub fn invalid_version(version_read: u16, supported_min: u16, supported_max: u16) -> Self {
+        Self::InvalidVersion {
+            version_read,
+            supported_min,
+            supported_max,
+        }
+    }
+
     /// Check if this is a recoverable error
     pub fn is_recoverable(&self) -> bool {
         match self {
@@ -262,6 +342,12 @@ impl RuzipError {
             RuzipError::Memory { .. } => "memory",
             RuzipError::InvalidArchive { .. } => "archive",
             RuzipError::Internal { .. } => "internal",
+            // Categories for new errors
+            RuzipError::HeaderParseError { .. } => "archive_header",
+            RuzipError::EntryParseError { .. } => "archive_entry",
+            RuzipError::ChecksumMismatch { .. } => "archive_checksum",
+            RuzipError::ArchiveTooShort { .. } => "archive_format",
+            RuzipError::InvalidVersion { .. } => "archive_version",
         }
     }
 }
@@ -435,6 +521,14 @@ impl ErrorRecovery for RuzipError {
             },
             RuzipError::Internal { .. } => RecoveryStrategy::Abort {
                 cleanup_required: true,
+            },
+            // Recovery strategies for new errors (defaulting to Abort or Skip)
+            RuzipError::HeaderParseError { .. } |
+            RuzipError::EntryParseError { .. } |
+            RuzipError::ChecksumMismatch { .. } |
+            RuzipError::ArchiveTooShort { .. } |
+            RuzipError::InvalidVersion { .. } => RecoveryStrategy::Abort {
+                cleanup_required: false, // Typically, parsing errors are not recoverable by retry
             },
             _ => RecoveryStrategy::Retry {
                 max_attempts: 1,
