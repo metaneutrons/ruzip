@@ -572,13 +572,16 @@ mod tests {
 
     #[test]
     fn test_performance_profiles() {
+        #[cfg(feature = "lz4-support")]
         let fast_engine = AdaptiveCompressionEngine::new().with_profile(PerformanceProfile::Fast);
         let max_engine = AdaptiveCompressionEngine::new().with_profile(PerformanceProfile::Maximum);
         
         // Fast profile should prefer LZ4 for binary data
-        let fast_algo = fast_engine.select_algorithm(FileType::Binary, 10000, Some(4.0));
         #[cfg(feature = "lz4-support")]
-        assert_eq!(fast_algo, CompressionAlgorithm::Lz4);
+        {
+            let fast_algo = fast_engine.select_algorithm(FileType::Binary, 10000, Some(4.0));
+            assert_eq!(fast_algo, CompressionAlgorithm::Lz4);
+        }
         
         // Maximum profile should prefer ZSTD/Brotli
         let max_algo = max_engine.select_algorithm(FileType::Binary, 10000, Some(4.0));
