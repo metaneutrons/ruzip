@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+
+# Pre-commit hook for RuZip
+# Validates conventional commits and runs code quality checks
+
+set -e
+
+echo "🔍 Running pre-commit checks..."
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Function to print colored output
+print_status() {
+    echo -e "${GREEN}✅ $1${NC}"
+}
+
+print_warning() {
+    echo -e "${YELLOW}⚠️  $1${NC}"
+}
+
+print_error() {
+    echo -e "${RED}❌ $1${NC}"
+}
+
+# Check if we have staged files
+if git diff --cached --quiet; then
+    print_warning "No staged files found"
+    exit 0
+fi
+
+# Check Rust formatting
+echo "🎨 Checking Rust code formatting..."
+if ! cargo fmt --check; then
+    print_error "Code formatting issues found!"
+    echo "Run: cargo fmt"
+    exit 1
+fi
+print_status "Code formatting is correct"
+
+# Run Clippy
+echo "🔍 Running Clippy lints..."
+if ! cargo clippy --all-targets --all-features -- -D warnings; then
+    print_error "Clippy found issues!"
+    echo "Fix the issues or run: cargo clippy --fix"
+    exit 1
+fi
+print_status "Clippy checks passed"
+
+# Run tests
+echo "🧪 Running tests..."
+if ! cargo test --all-features; then
+    print_error "Tests failed!"
+    exit 1
+fi
+print_status "All tests passed"
+
+# Check if Cargo.toml and Cargo.lock are in sync
+echo "📦 Checking Cargo files..."
+if ! cargo check --locked; then
+    print_error "Cargo.lock is out of sync with Cargo.toml"
+    echo "Run: cargo update"
+    exit 1
+fi
+print_status "Cargo files are in sync"
+
+# Additional checks for documentation
+echo "📖 Checking documentation..."
+if ! cargo doc --no-deps --document-private-items; then
+    print_error "Documentation build failed!"
+    exit 1
+fi
+print_status "Documentation builds successfully"
+
+print_status "All pre-commit checks passed!"
+echo "💡 Remember to use conventional commit format:"
+echo "   <type>[scope]: <description>"
+echo "   Example: feat(compression): add zstd level 22 support"

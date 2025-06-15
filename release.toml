@@ -1,0 +1,45 @@
+[workspace]
+
+[[workspace.metadata.release.pre-release-replacements]]
+file = "CHANGELOG.md"
+search = "Unreleased"
+replace = "{{version}}"
+
+[[workspace.metadata.release.pre-release-replacements]]
+file = "CHANGELOG.md"
+search = "\\.\\.\\.HEAD"
+replace = "...{{tag_name}}"
+exactly = 1
+
+[[workspace.metadata.release.pre-release-replacements]]
+file = "CHANGELOG.md"
+search = "ReleaseDate"
+replace = "{{date}}"
+
+[[workspace.metadata.release.pre-release-replacements]]
+file = "CHANGELOG.md"
+search = "<!-- next-header -->"
+replace = "<!-- next-header -->\n## [Unreleased] - ReleaseDate\n"
+exactly = 1
+
+[[workspace.metadata.release.pre-release-replacements]]
+file = "CHANGELOG.md"
+search = "<!-- next-url -->"
+replace = "<!-- next-url -->\n[Unreleased]: https://github.com/metaneutrons/ruzip/compare/{{tag_name}}...HEAD"
+exactly = 1
+
+[package.metadata.release]
+sign-commit = true
+sign-tag = true
+pre-release-commit-message = "chore(release): prepare for {{version}}"
+pro-release-commit-message = "chore(release): {{version}}"
+tag-message = "Release {{version}}"
+tag-name = "v{{version}}"
+pre-release-hook = ["git", "cliff", "--output", "CHANGELOG.md", "--tag", "{{version}}"]
+disable-push = false
+disable-tag = false
+disable-publish = false
+shared-version = true
+consolidate-commits = true
+dev-version-ext = "dev"
+publish = true

@@ -1,0 +1,165 @@
+name: Release
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-release
+        run: cargo install cargo-release
+
+      - name: Install git-cliff
+        run: cargo install git-cliff
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Run tests
+        run: cargo test --all-features
+
+      - name: Check for releasable changes
+        id: check_changes
+        run: |
+          # Get the last release tag
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          
+          if [ -z "$LAST_TAG" ]; then
+            echo "No previous releases found, will create initial release"
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "release_type=patch" >> $GITHUB_OUTPUT
+          else
+            # Check commits since last tag for conventional commit types
+            FEAT_COUNT=$(git log ${LAST_TAG}..HEAD --oneline | grep -c "^[a-f0-9]* feat" || true)
+            FIX_COUNT=$(git log ${LAST_TAG}..HEAD --oneline | grep -c "^[a-f0-9]* fix" || true)
+            BREAKING_COUNT=$(git log ${LAST_TAG}..HEAD --oneline | grep -c "!:" || true)
+            PERF_COUNT=$(git log ${LAST_TAG}..HEAD --oneline | grep -c "^[a-f0-9]* perf" || true)
+            
+            if [ "$BREAKING_COUNT" -gt 0 ]; then
+              echo "Breaking changes detected, will create major release"
+              echo "should_release=true" >> $GITHUB_OUTPUT
+              echo "release_type=major" >> $GITHUB_OUTPUT
+            elif [ "$FEAT_COUNT" -gt 0 ]; then
+              echo "Features detected, will create minor release"
+              echo "should_release=true" >> $GITHUB_OUTPUT
+              echo "release_type=minor" >> $GITHUB_OUTPUT
+            elif [ "$FIX_COUNT" -gt 0 ] || [ "$PERF_COUNT" -gt 0 ]; then
+              echo "Fixes/performance improvements detected, will create patch release"
+              echo "should_release=true" >> $GITHUB_OUTPUT
+              echo "release_type=patch" >> $GITHUB_OUTPUT
+            else
+              echo "No releasable changes found"
+              echo "should_release=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Generate changelog
+        if: steps.check_changes.outputs.should_release == 'true'
+        run: |
+          # Generate changelog with git-cliff
+          git cliff --output CHANGELOG.md
+
+      - name: Create release
+        if: steps.check_changes.outputs.should_release == 'true'
+        run: |
+          # Use cargo-release to handle versioning and tagging
+          cargo release ${{ steps.check_changes.outputs.release_type }} --execute --no-confirm
+
+      - name: Build release artifacts
+        if: steps.check_changes.outputs.should_release == 'true'
+        run: |
+          # Build release binary
+          cargo build --release --all-features
+          
+          # Create tarball
+          tar -czf ruzip-x86_64-unknown-linux-gnu.tar.gz -C target/release ruzip
+          
+          # Get the new version
+          NEW_VERSION=$(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "ruzip") | .version')
+          echo "NEW_VERSION=v$NEW_VERSION" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
+        if: steps.check_changes.outputs.should_release == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.NEW_VERSION }}
+          name: Release ${{ env.NEW_VERSION }}
+          body_path: CHANGELOG.md
+          files: |
+            ruzip-x86_64-unknown-linux-gnu.tar.gz
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-cross-platform:
+    needs: release
+    if: needs.release.outputs.should_release == 'true'
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build binary
+        run: cargo build --release --target ${{ matrix.target }} --all-features
+
+      - name: Package binary
+        shell: bash
+        run: |
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            7z a ruzip-${{ matrix.target }}.zip target/${{ matrix.target }}/release/ruzip.exe
+          else
+            tar -czf ruzip-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release ruzip
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruzip-${{ matrix.target }}
+          path: ruzip-${{ matrix.target }}.*

@@ -1,0 +1,137 @@
+# Rust compiled binaries and build artifacts
+/target/
+**/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo build files
+Cargo.lock
+# Uncomment the following line if you want to ignore Cargo.lock for libraries
+# But for applications, it's generally recommended to commit Cargo.lock
+# Cargo.lock
+
+# Dependency directory
+vendor/
+
+# Build output
+debug/
+release/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.orig
+
+# Rust-specific
+*.rs.bk
+.rustfmt_ok
+
+# RuZip specific test files and archives
+*.rzp
+*.ruzip
+test_*.rzp
+test_*.ruzip
+test_archive.*
+*.7z
+*.zip
+*.tar
+*.tar.gz
+*.bak
+*.backup
+
+# Test files
+test_file.txt
+file1.txt
+file2.txt  
+file3.txt
+# Keep if these are important test fixtures, otherwise remove them
+
+# Documentation build
+/docs/book/
+/docs/api/
+
+# Benchmark results
+/benches/results/
+*.bench
+
+# Coverage reports
+/coverage/
+*.profraw
+*.profdata
+lcov.info
+tarpaulin-report.html
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+
+# OS specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Configuration files (if they contain sensitive data)
+# Uncomment if your config files contain secrets
+# config.toml
+# .config/
+
+# Memory dumps and crash reports
+core
+*.dmp
+*.crash
+
+# Profiling data
+*.prof
+callgrind.out.*
+perf.data*
+
+# Generated files
+/generated/
+
+# Package managers
+node_modules/
+npm-debug.log*
+
+# Security and keys (if you add keychain/crypto features)
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+keystore
+.keystore
+
+# Flamegraph output
+flamegraph.svg
+perf.data
+perf.data.old
+
+# RuZip development specific
+# Development test archives
+/dev_test/
+/sandbox/
+
+# Clippy cache
+.clippy.toml.bak

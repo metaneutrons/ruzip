@@ -1,0 +1,104 @@
+name: Validate Commits
+
+on:
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  validate-commits:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate commit messages
+        run: |
+          echo "🔍 Validating commit messages..."
+          
+          # Define conventional commit regex
+          CONVENTIONAL_REGEX="^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9-]+\))?(!)?: .{1,72}$"
+          
+          # Get all commits in this PR
+          COMMITS=$(git log --format="%H %s" ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }})
+          
+          # Counter for validation
+          INVALID_COUNT=0
+          TOTAL_COUNT=0
+          
+          # Check each commit
+          while IFS= read -r line; do
+            if [ -z "$line" ]; then
+              continue
+            fi
+            
+            TOTAL_COUNT=$((TOTAL_COUNT + 1))
+            COMMIT_HASH=$(echo "$line" | cut -d' ' -f1)
+            COMMIT_MSG=$(echo "$line" | cut -d' ' -f2-)
+            
+            # Skip merge commits
+            if echo "$COMMIT_MSG" | grep -qE "^(Merge|Revert)"; then
+              echo "⏭️  Skipping merge/revert commit: $COMMIT_MSG"
+              continue
+            fi
+            
+            # Validate commit message
+            if echo "$COMMIT_MSG" | grep -qE "$CONVENTIONAL_REGEX"; then
+              echo "✅ Valid: $COMMIT_MSG"
+            else
+              echo "❌ Invalid: $COMMIT_MSG"
+              echo "   Commit: $COMMIT_HASH"
+              INVALID_COUNT=$((INVALID_COUNT + 1))
+            fi
+          done <<< "$COMMITS"
+          
+          # Report results
+          echo ""
+          echo "📊 Validation Summary:"
+          echo "   Total commits: $TOTAL_COUNT"
+          echo "   Invalid commits: $INVALID_COUNT"
+          
+          if [ "$INVALID_COUNT" -gt 0 ]; then
+            echo ""
+            echo "❌ Commit validation failed!"
+            echo ""
+            echo "Please ensure all commit messages follow the Conventional Commits format:"
+            echo "  <type>[optional scope]: <description>"
+            echo ""
+            echo "Valid types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+            echo "Valid scopes: cli, compression, crypto, archive, simd, threading, memory, platform, utils"
+            echo ""
+            echo "Examples:"
+            echo "  feat(compression): add zstd level 22 support"
+            echo "  fix(cli): resolve argument parsing issue"
+            echo "  docs: update installation guide"
+            echo "  perf(simd): optimize memory operations"
+            echo ""
+            exit 1
+          else
+            echo "✅ All commit messages are valid!"
+          fi
+
+  check-rust-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --all-features
