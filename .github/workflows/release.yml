@@ -1,8 +1,6 @@
 name: Release
 
 on:
-  push:
-    branches: [main, master]
   workflow_dispatch:
 
 permissions:
@@ -13,6 +11,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check_changes.outputs.should_release }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
